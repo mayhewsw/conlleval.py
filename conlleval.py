@@ -78,10 +78,35 @@ def evaluate(iterable, options=None):
     if options is None:
         options = parse_args([])    # use defaults
 
-    trainnames = set()
+    trainnames = defaultdict(int)
     if options.trainfile:
-        with open(trainfile) as f:
-            pass
+        last_pref = 'O'
+        last_label = ''
+        with open(options.trainfile) as f:
+            # get all phrases from trainfile
+            # assume word ... tag
+            curr = []
+            for line in f:
+                line = line.rstrip('\r\n')
+                if len(line) > 0:
+                    sline = line.split()
+                    word = sline[0]
+                    tag = sline[-1]
+                    pref, label = parse_tag(sline[-1])
+
+                    start = start_of_chunk(last_pref, pref,
+                                                   last_label, label)
+                    end = end_of_chunk(last_pref, pref,
+                                               last_label, label)
+                    last_pref = pref
+                    last_label = label
+
+                    if end:
+                        trainnames[" ".join(curr)] += 1
+                        curr = []
+                    if start or len(curr) > 0:
+                        curr.append(word)
+        print("Loaded trainfile: {}, with {} total names, {} unique names".format(options.trainfile, sum(trainnames.values()), len(trainnames)))
 
     counts = EvalCounts()
     num_features = None       # number of features per line
@@ -251,8 +276,6 @@ def end_of_chunk(prev_tag, tag, prev_type, type_):
 
     if prev_tag == 'E': chunk_end = True
     if prev_tag == 'S': chunk_end = True
-    #if prev_tag == 'L': chunk_end = True
-    #if prev_tag == 'U': chunk_end = True
 
     if prev_tag == 'B' and tag == 'B': chunk_end = True
     if prev_tag == 'B' and tag == 'S': chunk_end = True
