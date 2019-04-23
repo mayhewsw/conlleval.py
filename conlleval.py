@@ -23,21 +23,34 @@ Metrics = namedtuple('Metrics', 'tp fp fn prec rec fscore')
 
 class EvalCounts(object):
     def __init__(self):
-        self.correct_chunk = 0    # number of correctly identified chunks
+        self.correct_chunk = []    # number of correctly identified chunks
         self.correct_tags = 0     # number of correct chunk tags
-        self.found_correct = 0    # number of chunks in corpus
-        self.found_guessed = 0    # number of identified chunks
+        self.found_correct = []    # number of chunks in corpus
+        self.found_guessed = []    # number of identified chunks
         self.token_counter = 0    # token counter (ignores sentence breaks)
 
         # counts by type
-        self.t_correct_chunk = defaultdict(int)
-        self.t_found_correct = defaultdict(int)
-        self.t_found_guessed = defaultdict(int)
+        self.t_correct_chunk = defaultdict(list)
+        self.t_found_correct = defaultdict(list)
+        self.t_found_guessed = defaultdict(list)
+
+    def __repr__(self):
+        s = "correct_chunk " + str(self.correct_chunk) + "\n"
+        s += "correct_tags " + str(self.correct_tags) + "\n"
+        s += "found_correct " + str(self.found_correct) + "\n"
+        s += "found_guessed " + str(self.found_guessed) + "\n"
+
+        # counts by type
+        s += "t_correct_chunk " + str(self.t_correct_chunk)
+        #print(self.t_found_correct)
+        #print(self.t_found_guessed)
+
+        return s
 
 def parse_args(argv):
     import argparse
     parser = argparse.ArgumentParser(
-        description='evaluate tagging results using CoNLL criteria',
+        description='Evaluate tagging results using CoNLL criteria',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     arg = parser.add_argument
@@ -47,16 +60,28 @@ def parse_args(argv):
         help='character delimiting items in input')
     arg('-o', '--otag', metavar='CHAR', default='O',
         help='alternative outside tag')
+    arg('-t', '--trainfile', metavar='STR', default=None)
     arg('file', nargs='?', default=None)
     return parser.parse_args(argv)
 
 def parse_tag(t):
+    """
+    This takes a tag t, and returns the chunk label and type as a
+    tuple. For example, given B-MISC, it returns (B, MISC).
+
+    Given O, it returns (O,)
+    """
     m = re.match(r'^([^-]*)-(.*)$', t)
     return m.groups() if m else (t, '')
 
 def evaluate(iterable, options=None):
     if options is None:
         options = parse_args([])    # use defaults
+
+    trainnames = set()
+    if options.trainfile:
+        with open(trainfile) as f:
+            pass
 
     counts = EvalCounts()
     num_features = None       # number of features per line
@@ -66,13 +91,22 @@ def evaluate(iterable, options=None):
     last_guessed = 'O'        # previously identified chunk tag
     last_guessed_type = ''    # type of previous chunk tag in corpus
 
-    for line in iterable:
-        line = line.rstrip('\r\n')
+    # running tally
+    curr_guessed = []
+    curr_correct = []
 
-        if options.delimiter == ANY_SPACE:
-            features = line.split()
+    for line in iterable:
+
+        if type(line) is str:
+            line = line.rstrip('\r\n')
+            if options.delimiter == ANY_SPACE:
+                features = line.split()
+            else:
+                features = line.split(options.delimiter)
+        elif type(line) is list or type(line) is tuple:
+            features = list(line)
         else:
-            features = line.split(options.delimiter)
+            raise FormatError("unexpected type of input line! Type is: " + str(type(line)))
 
         if num_features is None:
             num_features = len(features)
@@ -85,6 +119,8 @@ def evaluate(iterable, options=None):
         if len(features) < 3:
             raise FormatError('unexpected number of features in line %s' % line)
 
+        # guessed is chunk signifier (B, I, etc.),
+        # guessed_type is the label (PER, ORG, etc.)
         guessed, guessed_type = parse_tag(features.pop())
         correct, correct_type = parse_tag(features.pop())
         first_item = features.pop(0)
@@ -105,20 +141,35 @@ def evaluate(iterable, options=None):
             if (end_correct and end_guessed and
                 last_guessed_type == last_correct_type):
                 in_correct = False
-                counts.correct_chunk += 1
-                counts.t_correct_chunk[last_correct_type] += 1
+                counts.correct_chunk.append(" ".join(curr_guessed))
+                counts.t_correct_chunk[last_correct_type].append(" ".join(curr_guessed))
             elif (end_correct != end_guessed or guessed_type != correct_type):
                 in_correct = False
+
+        if end_correct:
+            s = " ".join(curr_correct)
+            counts.found_correct.append(s)
+            counts.t_found_correct[curr_correct_type].append(s)
+            curr_correct = []
+        if end_guessed:
+            s = " ".join(curr_guessed)
+            counts.found_guessed.append(s)
+            counts.t_found_guessed[curr_guessed_type].append(s)
+            curr_guessed = []
+
+        if start_correct or len(curr_correct) > 0:
+            curr_correct.append(first_item)
+            if start_correct:
+                curr_correct_type = correct_type
+
+        if start_guessed or len(curr_guessed) > 0:
+            curr_guessed.append(first_item)
+            if start_guessed:
+                curr_guessed_type = guessed_type
 
         if start_correct and start_guessed and guessed_type == correct_type:
             in_correct = True
 
-        if start_correct:
-            counts.found_correct += 1
-            counts.t_found_correct[correct_type] += 1
-        if start_guessed:
-            counts.found_guessed += 1
-            counts.t_found_guessed[guessed_type] += 1
         if first_item != options.boundary:
             if correct == guessed and guessed_type == correct_type:
                 counts.correct_tags += 1
@@ -130,8 +181,18 @@ def evaluate(iterable, options=None):
         last_correct_type = correct_type
 
     if in_correct:
-        counts.correct_chunk += 1
-        counts.t_correct_chunk[last_correct_type] += 1
+        counts.correct_chunk.append(" ".join(curr_guessed))
+        counts.t_correct_chunk[last_correct_type].append(" ".join(curr_guessed))
+
+    if len(curr_guessed) > 0:
+        s = " ".join(curr_guessed)
+        counts.found_guessed.append(s)
+        counts.t_found_guessed[curr_guessed_type].append(s)
+
+    if len(curr_correct) > 0:
+        s = " ".join(curr_correct)
+        counts.found_correct.append(s)
+        counts.t_found_correct[curr_correct_type].append(s)
 
     return counts
 
@@ -149,12 +210,12 @@ def calculate_metrics(correct, guessed, total):
 def metrics(counts):
     c = counts
     overall = calculate_metrics(
-        c.correct_chunk, c.found_guessed, c.found_correct
+        len(c.correct_chunk), len(c.found_guessed), len(c.found_correct)
     )
     by_type = {}
     for t in uniq(list(c.t_found_correct) + list(c.t_found_guessed)):
         by_type[t] = calculate_metrics(
-            c.t_correct_chunk[t], c.t_found_guessed[t], c.t_found_correct[t]
+            len(c.t_correct_chunk[t]), len(c.t_found_guessed[t]), len(c.t_found_correct[t])
         )
     return overall, by_type
 
@@ -166,9 +227,9 @@ def report(counts, out=None):
 
     c = counts
     out.write('processed %d tokens with %d phrases; ' %
-              (c.token_counter, c.found_correct))
+              (c.token_counter, len(c.found_correct)))
     out.write('found: %d phrases; correct: %d.\n' %
-              (c.found_guessed, c.correct_chunk))
+              (len(c.found_guessed), len(c.correct_chunk)))
 
     if c.token_counter > 0:
         out.write('accuracy: %6.2f%%; ' %
@@ -181,7 +242,7 @@ def report(counts, out=None):
         out.write('%17s: ' % i)
         out.write('precision: %6.2f%%; ' % (100.*m.prec))
         out.write('recall: %6.2f%%; ' % (100.*m.rec))
-        out.write('FB1: %6.2f  %d\n' % (100.*m.fscore, c.t_found_guessed[i]))
+        out.write('FB1: %6.2f  %d\n' % (100.*m.fscore, len(c.t_found_guessed[i])))
 
 def end_of_chunk(prev_tag, tag, prev_type, type_):
     # check if a chunk ended between the previous and current word
@@ -190,6 +251,8 @@ def end_of_chunk(prev_tag, tag, prev_type, type_):
 
     if prev_tag == 'E': chunk_end = True
     if prev_tag == 'S': chunk_end = True
+    #if prev_tag == 'L': chunk_end = True
+    #if prev_tag == 'U': chunk_end = True
 
     if prev_tag == 'B' and tag == 'B': chunk_end = True
     if prev_tag == 'B' and tag == 'S': chunk_end = True
